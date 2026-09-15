@@ -1,0 +1,22 @@
+<resources>
+    <string name="app_name">TurtleTavern (Go)</string>
+    <string name="server_tools">Server Tools</string>
+    <string name="tab_config">Config</string>
+    <string name="tab_logs">Logs</string>
+    <string name="config_hint">config.yaml</string>
+    <string name="save_config">Save</string>
+    <string name="restart_server">Restart</string>
+    <string name="downloading_file">Downloading %1$s…</string>
+    <string name="download_failed">Download failed</string>
+    <string name="import_backup">Import Backup…</string>
+    <string name="import_not_restorable">This file is not a TurtleTavern backup.</string>
+    <string name="import_hash_warning">Some files failed hash verification. Import anyway?</string>
+    <string name="import_anyway">Import anyway</string>
+    <string name="import_cancel">Cancel</string>
+    <string name="import_failed">Import failed: %1$s</string>
+    <string name="import_done">Backup imported — restarting server…</string>
+    <string name="keep_alive">Keep server running (wake lock)</string>
+    <string name="keep_alive_notification_channel">Server keep-alive</string>
+    <string name="keep_alive_notification_title">TurtleTavern server running</string>
+    <string name="keep_alive_notification_text">Wake lock held so the system stops closing the app</string>
+</resources>
