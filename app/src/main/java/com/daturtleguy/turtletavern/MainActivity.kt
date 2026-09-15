@@ -113,7 +113,10 @@ class MainActivity : AppCompatActivity() {
             domStorageEnabled = true
             mediaPlaybackRequiresUserGesture = false
             allowFileAccess = false
-            allowContentAccess = false
+            // SAF hands file pickers back as content:// URIs — with content
+            // access disabled those uploads silently break, so every file
+            // input in the frontend appeared to accept zips only.
+            allowContentAccess = true
         }
 
         btnTabConfig.setOnClickListener {
@@ -150,8 +153,24 @@ class MainActivity : AppCompatActivity() {
             ): Boolean {
                 fileChooserCallback?.onReceiveValue(null)
                 fileChooserCallback = filePathCallback
+                val requestedTypes = fileChooserParams.acceptTypes
+                    .filter { it.isNotBlank() && it != "*/*" }
+                    .toTypedArray()
+                val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    // Some OEM pickers (OneUI included) hide everything when a
+                    // narrow mime is requested, so ask for anything and let
+                    // EXTRA_MIME_TYPES carry the page's accept= hints.
+                    type = "*/*"
+                    if (requestedTypes.isNotEmpty()) {
+                        putExtra(Intent.EXTRA_MIME_TYPES, requestedTypes)
+                    }
+                    if (fileChooserParams.mode == FileChooserParams.MODE_OPEN_MULTIPLE) {
+                        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                    }
+                }
                 return try {
-                    fileChooserLauncher.launch(fileChooserParams.createIntent())
+                    fileChooserLauncher.launch(intent)
                     true
                 } catch (t: Throwable) {
                     AppLog.e(TAG, "File chooser launch failed", t)
