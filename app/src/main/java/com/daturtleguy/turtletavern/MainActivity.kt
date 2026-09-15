@@ -154,6 +154,11 @@ class MainActivity : AppCompatActivity() {
             allowContentAccess = true
         }
 
+        // Default policy waives the renderer whenever this activity is not
+        // visible, which lets Android freeze it mid-generation. Keep it
+        // important so running generations survive being backgrounded.
+        webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+
         btnTabConfig.setOnClickListener {
             showTab(config = true)
         }
@@ -656,6 +661,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applyKeepAlive(enabled: Boolean) {
+        AppLog.i(TAG, "applyKeepAlive($enabled)")
         val intent = Intent(this, KeepAliveService::class.java)
         if (enabled) {
             androidx.core.content.ContextCompat.startForegroundService(this, intent)
@@ -849,6 +855,9 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         AppLog.i(TAG, "onStart")
+        // Do not remove: the switch is restored from prefs before its listener
+        // is attached, so that listener never fires for the restored value.
+        applyKeepAlive(getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_KEEP_ALIVE, false))
     }
 
     override fun onStop() {
