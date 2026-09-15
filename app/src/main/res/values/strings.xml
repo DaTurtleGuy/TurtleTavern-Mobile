@@ -19,4 +19,12 @@
     <string name="keep_alive_notification_channel">Server keep-alive</string>
     <string name="keep_alive_notification_title">TurtleTavern server running</string>
     <string name="keep_alive_notification_text">Wake lock held so the system stops closing the app</string>
+    <string name="share_logs">Share logs…</string>
+    <string name="share_logs_subject">TurtleTavern logs</string>
+    <string name="share_logs_empty">No log files to share yet.</string>
+    <string name="share_logs_failed">Could not prepare logs: %1$s</string>
+    <string name="share_logs_preparing">Packaging logs…</string>
+    <string name="download_logs">Download logs</string>
+    <string name="download_logs_done">Saved %1$s to Downloads</string>
+    <string name="download_logs_failed">Could not save logs: %1$s</string>
 </resources>
