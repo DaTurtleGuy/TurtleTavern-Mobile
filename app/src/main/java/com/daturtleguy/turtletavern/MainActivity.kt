@@ -41,6 +41,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
 import androidx.core.view.GravityCompat
 import androidx.drawerlayout.widget.DrawerLayout
+import androidx.lifecycle.Lifecycle
 import com.daturtleguy.turtletavern.gotavern.Gotavern
 import org.json.JSONObject
 import java.io.BufferedInputStream
@@ -76,6 +77,7 @@ class MainActivity : AppCompatActivity() {
     private var consumedConsole = 0L
     private var logsPrimed = false
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
+    private var rendererGonePending = false
 
     private val fileChooserLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val callback = fileChooserCallback
@@ -249,11 +251,13 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-                // The WebView renderer dying looks exactly like "the app closed
-                // itself" to a user, so it gets a loud log line plus recovery.
-                AppLog.e(TAG, "WebView renderer gone (crashed=${detail.didCrash()}) — recreating activity")
-                if (!isFinishing) {
-                    ui.post { recreate() }
+                AppLog.e(TAG, "WebView renderer gone (crashed=${detail.didCrash()})")
+                // A dead WebView is never reusable, and rebuilding while hidden
+                // would reload off-screen: wait until the activity is visible.
+                if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                    if (!isFinishing) ui.post { recreate() }
+                } else {
+                    rendererGonePending = true
                 }
                 return true
             }
@@ -858,6 +862,18 @@ class MainActivity : AppCompatActivity() {
         // Do not remove: the switch is restored from prefs before its listener
         // is attached, so that listener never fires for the restored value.
         applyKeepAlive(getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_KEEP_ALIVE, false))
+        if (rendererGonePending) {
+            rendererGonePending = false
+            AppLog.i(TAG, "recovering the WebView after the renderer died in the background")
+            recreate()
+        }
+    }
+
+    // singleTask means a launcher tap reuses this instance instead of stacking a
+    // second activity (and a second WebView, which reloaded the whole page).
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        AppLog.i(TAG, "onNewIntent (launcher tapped, existing activity reused)")
     }
 
     override fun onStop() {
