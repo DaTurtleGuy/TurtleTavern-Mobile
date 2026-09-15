@@ -24,6 +24,42 @@ object AppLog {
     private val currentFile = AtomicReference<File>()
     private val io = Executors.newSingleThreadExecutor()
 
+    private const val CONSOLE_MAX_LINES = 400
+    private val consoleLock = Any()
+    private val consoleLines = ArrayDeque<Pair<Long, String>>()
+    private var consoleSeq = 0L
+
+    /**
+     * Remembers the WebView console output so the in-app Logs tab can show it
+     * next to the server logs (previously it only reached logcat/the log file).
+     */
+    fun console(message: String) {
+        synchronized(consoleLock) {
+            consoleSeq++
+            consoleLines.addLast(consoleSeq to message)
+            while (consoleLines.size > CONSOLE_MAX_LINES) {
+                consoleLines.removeFirst()
+            }
+        }
+    }
+
+    fun consoleDump(): String = synchronized(consoleLock) {
+        consoleLines.joinToString("\n") { "[console] ${it.second}" }
+    }
+
+    /**
+     * Console lines not yet consumed past [index], already prefixed for display,
+     * plus the new index. Lets the Logs tab append instead of re-rendering
+     * everything (re-rendering reset the scroll position every second).
+     */
+    fun consoleSince(index: Long): Pair<String, Long> = synchronized(consoleLock) {
+        val fresh = consoleLines.filter { it.first > index }
+        fresh.joinToString("\n") { "[console] ${it.second}" } to consoleSeq
+    }
+
+    /** Directory holding the daily `.log` files (whole files are shared, never tails). */
+    val logDirectory: File? get() = logDir
+
     fun init(context: Context) {
         logDir = File(context.getExternalFilesDir(null) ?: context.filesDir, "logs").apply { mkdirs() }
         val previous = Thread.getDefaultUncaughtExceptionHandler()

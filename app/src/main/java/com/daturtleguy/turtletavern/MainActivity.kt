@@ -3,6 +3,7 @@ package com.daturtleguy.turtletavern
 import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.app.DownloadManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -11,13 +12,19 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowInsets
 import android.webkit.CookieManager
 import android.webkit.ConsoleMessage
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
@@ -25,21 +32,29 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.FileProvider
 import androidx.core.view.GravityCompat
 import androidx.drawerlayout.widget.DrawerLayout
 import com.daturtleguy.turtletavern.gotavern.Gotavern
 import org.json.JSONObject
 import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.CountDownLatch
+import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 
 class MainActivity : AppCompatActivity() {
 
@@ -50,11 +65,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var drawer: DrawerLayout
     private lateinit var configEdit: EditText
     private lateinit var logsText: TextView
+    private lateinit var logsScroll: ScrollView
     private lateinit var btnTabConfig: Button
     private lateinit var btnTabLogs: Button
     private val ui = Handler(Looper.getMainLooper())
     private var serverPort: Int = 0
     private var logsVisible = false
+    private var logsUserTouched = false
+    private var lastServerText = ""
+    private var consumedConsole = 0L
+    private var logsPrimed = false
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
 
     private val fileChooserLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -91,6 +111,21 @@ class MainActivity : AppCompatActivity() {
         drawer = findViewById(R.id.drawer)
         configEdit = findViewById(R.id.config_edit)
         logsText = findViewById(R.id.logs_text)
+        logsScroll = findViewById(R.id.panel_logs)
+        // Following the tail is driven by *touch*, not by scroll events:
+        // assigning new text resets the scroll position and made the old
+        // listener think the user had scrolled away.
+        logsScroll.setOnTouchListener { _, event ->
+            if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                logsUserTouched = true
+            }
+            false
+        }
+        logsScroll.setOnScrollChangeListener { _, _, _, _, _ ->
+            if (logsUserTouched && logsScroll.scrollY + logsScroll.height >= logsText.height - 64) {
+                logsUserTouched = false
+            }
+        }
         btnTabConfig = findViewById(R.id.btn_tab_config)
         btnTabLogs = findViewById(R.id.btn_tab_logs)
 
@@ -134,6 +169,8 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.btn_save_config).setOnClickListener { saveConfig() }
         findViewById<Button>(R.id.btn_restart).setOnClickListener { restartServer() }
+        findViewById<Button>(R.id.btn_share_logs).setOnClickListener { shareLogs() }
+        findViewById<Button>(R.id.btn_download_logs).setOnClickListener { downloadLogs() }
         findViewById<Button>(R.id.btn_import_backup).setOnClickListener {
             restorePicker.launch("application/zip")
         }
@@ -142,6 +179,7 @@ class MainActivity : AppCompatActivity() {
             // Mirrors console output into logcat (tag: TurtleTavern-Console)
             // so users can attach logs to bug reports.
             override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
+                AppLog.console(consoleMessage.message())
                 AppLog.i("Console", consoleMessage.message())
                 return true
             }
@@ -153,18 +191,14 @@ class MainActivity : AppCompatActivity() {
             ): Boolean {
                 fileChooserCallback?.onReceiveValue(null)
                 fileChooserCallback = filePathCallback
-                val requestedTypes = fileChooserParams.acceptTypes
-                    .filter { it.isNotBlank() && it != "*/*" }
-                    .toTypedArray()
+                // Never filter the picker: pages pass accept= values that are
+                // frequently bare extensions (".png", ".charx"), and Android
+                // matches those against nothing, leaving an empty file list.
+                // The page validates whatever comes back.
                 val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
                     addCategory(Intent.CATEGORY_OPENABLE)
-                    // Some OEM pickers (OneUI included) hide everything when a
-                    // narrow mime is requested, so ask for anything and let
-                    // EXTRA_MIME_TYPES carry the page's accept= hints.
                     type = "*/*"
-                    if (requestedTypes.isNotEmpty()) {
-                        putExtra(Intent.EXTRA_MIME_TYPES, requestedTypes)
-                    }
+                    putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("*/*"))
                     if (fileChooserParams.mode == FileChooserParams.MODE_OPEN_MULTIPLE) {
                         putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
                     }
@@ -195,6 +229,28 @@ class MainActivity : AppCompatActivity() {
                 view.isVerticalScrollBarEnabled = !isBaseUrl
                 view.isHorizontalScrollBarEnabled = !isBaseUrl
                 super.doUpdateVisitedHistory(view, url, isReload)
+            }
+
+            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                if (request.isForMainFrame) {
+                    AppLog.e(TAG, "WebView load error (${error.errorCode}): ${error.description} for ${request.url}")
+                }
+            }
+
+            override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
+                if (request.isForMainFrame && response.statusCode >= 400) {
+                    AppLog.w(TAG, "WebView HTTP ${response.statusCode} for ${request.url}")
+                }
+            }
+
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                // The WebView renderer dying looks exactly like "the app closed
+                // itself" to a user, so it gets a loud log line plus recovery.
+                AppLog.e(TAG, "WebView renderer gone (crashed=${detail.didCrash()}) — recreating activity")
+                if (!isFinishing) {
+                    ui.post { recreate() }
+                }
+                return true
             }
         }
 
@@ -243,6 +299,10 @@ class MainActivity : AppCompatActivity() {
         if (config) {
             loadConfigIntoEditor()
         } else {
+            logsUserTouched = false
+            logsPrimed = false
+            lastServerText = ""
+            consumedConsole = 0L
             refreshLogsNow()
             ui.postDelayed(LOG_REFRESH_TICK, REFRESH_MS)
         }
@@ -268,10 +328,49 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
+    // Appends only the new server output and console lines. Re-rendering the
+    // whole buffer every tick reset the scroll position, which is what made the
+    // panel bounce top→bottom every second.
     private fun refreshLogsNow() {
         Thread {
-            val logs = try { Gotavern.logs() } catch (_: Throwable) { "" }
-            ui.post { logsText.text = logs.ifEmpty { "(no log output)" } }
+            val server = try { Gotavern.logs() } catch (_: Throwable) { "" }
+            val (consoleNew, consoleIndex) = AppLog.consoleSince(consumedConsole)
+            consumedConsole = consoleIndex
+
+            val payloadBuilder = StringBuilder()
+            val serverGrew = logsPrimed && server.startsWith(lastServerText)
+            val reset = !serverGrew
+            if (serverGrew) {
+                payloadBuilder.append(server.substring(lastServerText.length))
+            } else {
+                payloadBuilder.append(server)
+            }
+            lastServerText = server
+            if (consoleNew.isNotEmpty()) {
+                if (payloadBuilder.isNotEmpty()) {
+                    payloadBuilder.append('\n')
+                }
+                payloadBuilder.append(consoleNew)
+            }
+            val payload = payloadBuilder.toString()
+            if (payload.isEmpty() && !reset) {
+                return@Thread
+            }
+
+            ui.post {
+                if (reset) {
+                    logsText.text = payload.ifEmpty { "(no output yet)" }
+                    logsPrimed = true
+                } else {
+                    logsText.append(if (logsText.text.isEmpty()) payload else "\n$payload")
+                }
+                if (logsText.length() > LOG_TEXT_MAX_CHARS) {
+                    logsText.text = logsText.text.takeLast(LOG_TEXT_MAX_CHARS / 2)
+                }
+                if (!logsUserTouched) {
+                    logsText.post { logsScroll.fullScroll(View.FOCUS_DOWN) }
+                }
+            }
         }.start()
     }
 
@@ -565,6 +664,101 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Packages the COMPLETE log files (plus the in-memory server ring buffer and
+    // browser console) into one zip. Nothing is truncated: big reports are
+    // exactly the ones we need.
+    private fun buildLogsZip(): File {
+        val shareDir = File(cacheDir, "logs").apply { mkdirs() }
+        shareDir.listFiles()
+            ?.sortedByDescending { it.lastModified() }
+            ?.drop(3)
+            ?.forEach { it.delete() }
+
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+        val zipFile = File(shareDir, "turtletavern-logs-$stamp.zip")
+        ZipOutputStream(BufferedOutputStream(FileOutputStream(zipFile))).use { zip ->
+            fun put(name: String, bytes: ByteArray) {
+                zip.putNextEntry(ZipEntry(name))
+                zip.write(bytes)
+                zip.closeEntry()
+            }
+
+            AppLog.logDirectory
+                ?.listFiles { f -> f.isFile && f.name.endsWith(".log") }
+                ?.sortedBy { it.name }
+                ?.forEach { file -> put(file.name, file.readBytes()) }
+
+            put("server-logs.txt", (try { Gotavern.logs() } catch (_: Throwable) { "" }).toByteArray())
+            put("browser-console.txt", AppLog.consoleDump().toByteArray())
+            put("device-info.txt", buildDeviceReport().toByteArray())
+        }
+        AppLog.i(TAG, "Log bundle ready: ${zipFile.name} (${zipFile.length() / 1024} KiB)")
+        return zipFile
+    }
+
+    private fun shareLogs() {
+        ui.post { Toast.makeText(this, getString(R.string.share_logs_preparing), Toast.LENGTH_SHORT).show() }
+        Thread {
+            try {
+                val zipFile = buildLogsZip()
+                val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", zipFile)
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "application/zip"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    putExtra(Intent.EXTRA_SUBJECT, getString(R.string.share_logs_subject))
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                ui.post { startActivity(Intent.createChooser(send, getString(R.string.share_logs))) }
+            } catch (t: Throwable) {
+                AppLog.e(TAG, "Sharing logs failed", t)
+                ui.post {
+                    Toast.makeText(this, getString(R.string.share_logs_failed, t.message ?: t.toString()), Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
+    }
+
+    private fun downloadLogs() {
+        ui.post { Toast.makeText(this, getString(R.string.share_logs_preparing), Toast.LENGTH_SHORT).show() }
+        Thread {
+            try {
+                val zipFile = buildLogsZip()
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, zipFile.name)
+                    put(MediaStore.Downloads.MIME_TYPE, "application/zip")
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+                val resolver = contentResolver
+                val target = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: throw java.io.IOException("no Downloads collection available")
+                resolver.openOutputStream(target).use { output ->
+                    requireNotNull(output) { "cannot open Downloads target" }
+                    zipFile.inputStream().use { input -> input.copyTo(output) }
+                }
+                values.clear()
+                values.put(MediaStore.Downloads.IS_PENDING, 0)
+                resolver.update(target, values, null, null)
+                AppLog.i(TAG, "Log bundle downloaded to Downloads/${zipFile.name}")
+                ui.post { Toast.makeText(this, getString(R.string.download_logs_done, zipFile.name), Toast.LENGTH_LONG).show() }
+            } catch (t: Throwable) {
+                AppLog.e(TAG, "Downloading logs failed", t)
+                ui.post {
+                    Toast.makeText(this, getString(R.string.download_logs_failed, t.message ?: t.toString()), Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
+    }
+
+    private fun buildDeviceReport(): String = buildString {
+        val info = try { packageManager.getPackageInfo(packageName, 0) } catch (_: Throwable) { null }
+        append("TurtleTavern (Go) ").append(info?.versionName ?: "?").append(" (").append(info?.longVersionCode ?: 0).append(")\n")
+        append("device: ").append(Build.MANUFACTURER).append(' ').append(Build.MODEL).append('\n')
+        append("android: ").append(Build.VERSION.RELEASE).append(" (API ").append(Build.VERSION.SDK_INT).append(")\n")
+        append("abis: ").append(Build.SUPPORTED_ABIS.joinToString()).append('\n')
+        append("server port: ").append(serverPort).append('\n')
+        append("log dir: ").append(AppLog.logDirectory?.absolutePath ?: "?").append('\n')
+    }
+
     private fun boot() {
         try {
             val root = ensureBootstrap()
@@ -652,7 +846,28 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    override fun onStart() {
+        super.onStart()
+        AppLog.i(TAG, "onStart")
+    }
+
+    override fun onStop() {
+        AppLog.i(TAG, "onStop (activity went to background)")
+        super.onStop()
+    }
+
+    override fun onTrimMemory(level: Int) {
+        AppLog.w(TAG, "onTrimMemory($level) — system is pressuring the app")
+        super.onTrimMemory(level)
+    }
+
+    override fun onLowMemory() {
+        AppLog.w(TAG, "onLowMemory — system is critically low on memory")
+        super.onLowMemory()
+    }
+
     override fun onDestroy() {
+        AppLog.i(TAG, "onDestroy (isFinishing=$isFinishing)")
         ui.removeCallbacks(LOG_REFRESH_TICK)
         super.onDestroy()
     }
@@ -660,6 +875,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "TurtleTavern"
         private const val REFRESH_MS = 1000L
+        private const val LOG_TEXT_MAX_CHARS = 400_000
         private const val PREFS = "turtletavern"
         private const val KEY_KEEP_ALIVE = "keep_alive"
     }
