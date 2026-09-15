@@ -18,3 +18,4 @@ captures/
 
 # Kotlin caches
 .kotlin/
+*.apk
