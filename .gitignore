@@ -1,0 +1,20 @@
+# build artifacts + generated inputs
+build/
+app/build/
+.gradle/
+app/libs/gotavern.aar
+app/src/main/assets/bootstrap.zip
+
+# signing material
+app/signing/
+*.jks
+*.keystore
+
+# IDE + local
+.idea/
+local.properties
+*.log
+captures/
+
+# Kotlin caches
+.kotlin/
