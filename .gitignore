@@ -19,3 +19,4 @@ captures/
 # Kotlin caches
 .kotlin/
 *.apk
+RELEASE-*.md
