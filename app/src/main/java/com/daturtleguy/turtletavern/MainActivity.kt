@@ -793,7 +793,12 @@ class MainActivity : AppCompatActivity() {
     private fun ensureBootstrap(): File {
         val root = filesDir
         val marker = File(root, ".bootstrap-version")
-        val version = "${packageManager.getPackageInfo(packageName, 0).longVersionCode}-${Gotavern.version()}"
+        val info = packageManager.getPackageInfo(packageName, 0)
+        // lastUpdateTime is part of the key on purpose: the frontend ships in this
+        // APK, and a release that only changes assets keeps the same versionCode,
+        // so an install would otherwise keep serving the previously extracted
+        // frontend forever.
+        val version = "${info.longVersionCode}-${info.lastUpdateTime}-${Gotavern.version()}"
         if (marker.isFile && marker.readText().trim() == version) {
             return root
         }
@@ -810,6 +815,10 @@ class MainActivity : AppCompatActivity() {
                     }
                     if (entry.isDirectory) {
                         target.mkdirs()
+                    } else if (entry.name == "config.yaml" && target.isFile) {
+                        // User state: the drawer's Config editor writes this file, and
+                        // re-extracting must not reset someone's settings.
+                        AppLog.i(TAG, "Keeping existing config.yaml")
                     } else {
                         target.parentFile?.mkdirs()
                         FileOutputStream(target).use { out -> zis.copyTo(out) }

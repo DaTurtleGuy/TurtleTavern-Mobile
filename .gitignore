@@ -2,7 +2,7 @@
 build/
 app/build/
 .gradle/
-app/libs/gotavern.aar
+app/libs/
 app/src/main/assets/bootstrap.zip
 
 # signing material
