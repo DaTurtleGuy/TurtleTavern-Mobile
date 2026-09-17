@@ -33,6 +33,17 @@ unhealthy amounts of gratitude.
     and a hash-mismatch dialog with "Import anyway"
   - **Keep server running (wake lock)** — foreground service + partial wake
     lock so OneUI stops killing the app
+- **Listen on LAN (non-localhost)** — drawer switch, off by default and never
+  remembered: listens on `0.0.0.0:8000` and forwards into the loopback-only Go
+  server (backend untouched, whitelist still sees `127.0.0.1`). Exclusive with
+  the WebView — the screen shows the address instead, and coming back does a
+  fresh load. Off drops the listener *and* live connections. No auth on LAN:
+  anyone on your Wi-Fi gets the whole tavern
+- **Log bundles** — Share/Download zip the file logs, the server ring buffer,
+  the browser console and a `device-info.txt` (app + `backend:` versions)
+- Console objects stringified in-page (no `[object Object]`), blob downloads
+  via an in-page bridge, keep-alive re-applied on every start, `singleTask`
+  launcher reuse, renderer-death recovery, unfiltered file picker
 - Exports stream into the system Downloads (notification included)
 
 ## Building
@@ -54,7 +65,14 @@ Requirements: JDK 17+, Android SDK (API 37), NDK 30, gomobile tooling.
 3. `.\gradlew assembleRelease`
 
 `versionName` / `versionCode` bump every release; the keystore lives outside
-the repo (`app/signing/` — credentials not committed).
+the repo (`app/signing/` — credentials not committed). Since 0.1.5 the app
+version moves independently of the backend (which bumps only on Go changes;
+the bundled backend version is reported in log bundles under `backend:`).
+
+Shell notes: run `gomobile bind` via `cmd /c` (PowerShell mangles the dotted
+`-javapkg` arg); gradle with `--console=plain`; treat long commands as
+background work and check `.\gradlew --status` after any abort (a stale BUSY
+daemon makes the retry look hung).
 
 ## Debug builds vs release
 
