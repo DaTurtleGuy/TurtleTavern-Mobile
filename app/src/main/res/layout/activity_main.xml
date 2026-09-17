@@ -47,6 +47,26 @@
                     android:text="Starting TurtleTavern…" />
             </LinearLayout>
         </FrameLayout>
+
+        <LinearLayout
+            android:id="@+id/lan_panel"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#FF1B1B1F"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="24dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/lan_panel_text"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:typeface="monospace"
+                android:textSize="14sp"
+                android:textColor="#FFEEEEEE" />
+        </LinearLayout>
     </FrameLayout>
 
     <LinearLayout
@@ -170,6 +190,40 @@
             android:layout_marginBottom="4dp"
             android:text="@string/keep_alive"
             android:textColor="#FFEEEEEE" />
+
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/lan_switch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:layout_marginEnd="12dp"
+            android:layout_marginBottom="2dp"
+            android:text="@string/lan_listen"
+            android:textColor="#FFEEEEEE" />
+
+        <TextView
+            android:id="@+id/lan_hint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:layout_marginEnd="12dp"
+            android:layout_marginBottom="2dp"
+            android:textSize="11sp"
+            android:textColor="#FFCC9999"
+            android:text="@string/lan_listen_hint" />
+
+        <TextView
+            android:id="@+id/lan_url"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:layout_marginEnd="12dp"
+            android:layout_marginBottom="4dp"
+            android:textSize="12sp"
+            android:typeface="monospace"
+            android:textIsSelectable="true"
+            android:textColor="#FFAACCFF"
+            android:visibility="gone" />
 
         <Button
             android:id="@+id/btn_import_backup"

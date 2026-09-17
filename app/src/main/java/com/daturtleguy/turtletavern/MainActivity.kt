@@ -73,6 +73,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnTabLogs: Button
     private val ui = Handler(Looper.getMainLooper())
     private var serverPort: Int = 0
+    private val lanRelay = LanTcpRelay()
+    private var lanListenEnabled = false
+    private lateinit var lanUrl: TextView
+    private lateinit var lanPanel: View
+    private lateinit var lanPanelText: TextView
     private var logsVisible = false
     private var logsUserTouched = false
     private var lastServerText = ""
@@ -178,6 +183,23 @@ class MainActivity : AppCompatActivity() {
         keepAliveSwitch.setOnCheckedChangeListener { _, checked ->
             prefs.edit().putBoolean(KEY_KEEP_ALIVE, checked).apply()
             applyKeepAlive(checked)
+        }
+        lanUrl = findViewById(R.id.lan_url)
+        lanPanel = findViewById(R.id.lan_panel)
+        lanPanelText = findViewById(R.id.lan_panel_text)
+        prefs.edit().remove(KEY_LISTEN_LAN).apply()
+        val lanSwitch = findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.lan_switch)
+        lanSwitch.isChecked = lanListenEnabled
+        refreshLanUrl()
+        lanSwitch.setOnCheckedChangeListener { _, checked ->
+            lanListenEnabled = checked
+            AppLog.i(TAG, "LAN listen toggled to $checked")
+            if (checked) {
+                refreshLanUrl()
+                startLanRelayAsync()
+            } else {
+                stopLanRelay()
+            }
         }
         findViewById<Button>(R.id.btn_save_config).setOnClickListener { saveConfig() }
         findViewById<Button>(R.id.btn_restart).setOnClickListener { restartServer() }
@@ -306,7 +328,7 @@ class MainActivity : AppCompatActivity() {
             override fun handleOnBackPressed() {
                 if (drawer.isDrawerOpen(GravityCompat.START)) {
                     drawer.closeDrawer(GravityCompat.START)
-                } else if (webView.canGoBack()) {
+                } else if (webView.visibility == View.VISIBLE && webView.canGoBack()) {
                     webView.goBack()
                 } else {
                     finish()
@@ -498,6 +520,7 @@ class MainActivity : AppCompatActivity() {
                 Gotavern.stop()
                 val port = Gotavern.start(filesDir.absolutePath, 0)
                 serverPort = port
+                syncLanRelay()
                 ui.post {
                     progressOverlay.visibility = View.GONE
                     webView.loadUrl("http://127.0.0.1:$port/")
@@ -654,6 +677,7 @@ class MainActivity : AppCompatActivity() {
 
             val port = Gotavern.start(filesDir.absolutePath, 0)
             serverPort = port
+            syncLanRelay()
             hideProgressAndUnlock()
             ui.post { webView.loadUrl("http://127.0.0.1:$port/") }
         } catch (t: Throwable) {
@@ -664,6 +688,7 @@ class MainActivity : AppCompatActivity() {
                 try {
                     val port = Gotavern.start(filesDir.absolutePath, 0)
                     serverPort = port
+                    syncLanRelay()
                     hideProgressAndUnlock()
                     ui.post { webView.loadUrl("http://127.0.0.1:$port/") }
                 } catch (t2: Throwable) {
@@ -772,6 +797,98 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun lanEnabled(): Boolean = lanListenEnabled
+
+    private fun syncLanRelay() {
+        if (!lanEnabled()) {
+            lanRelay.stop()
+            ui.post { refreshLanUrl() }
+            return
+        }
+        startLanRelayAsync()
+    }
+
+    private fun startLanRelayAsync() {
+        if (serverPort == 0) {
+            ui.post { refreshLanUrl() }
+            return
+        }
+        val target = serverPort
+        Thread {
+            try {
+                val bound = lanRelay.start(LAN_PORT_DEFAULT, target)
+                AppLog.i(TAG, "LAN relay up on $bound -> 127.0.0.1:$target")
+                ui.post { refreshLanUrl() }
+                ui.post {
+                    val ips = LanTcpRelay.lanIPv4Addresses()
+                    val first = ips.firstOrNull() ?: "this device"
+                    Toast.makeText(this, "LAN: http://$first:$bound", Toast.LENGTH_LONG).show()
+                }
+            } catch (t: Throwable) {
+                AppLog.e(TAG, "LAN relay failed", t)
+                ui.post {
+                    Toast.makeText(this, getString(R.string.lan_failed, t.message ?: t.toString()), Toast.LENGTH_LONG).show()
+                    refreshLanUrl()
+                }
+            }
+        }.start()
+    }
+
+    private fun stopLanRelay() {
+        lanRelay.stop()
+        refreshLanUrl()
+    }
+
+    private fun refreshLanUrl() {
+        if (!::lanUrl.isInitialized) return
+        if (!lanEnabled()) {
+            lanUrl.visibility = View.GONE
+        } else {
+            lanUrl.visibility = View.VISIBLE
+            if (!lanRelay.isRunning()) {
+                lanUrl.text = getString(R.string.lan_url_none)
+            } else {
+                val port = lanRelay.boundPort
+                val ips = LanTcpRelay.lanIPv4Addresses()
+                lanUrl.text = if (ips.isEmpty()) {
+                    "LAN: http://<this device>:$port"
+                } else {
+                    ips.joinToString("\n") { "LAN: http://$it:$port" }
+                }
+            }
+        }
+        applyLanModeUi()
+    }
+
+    private fun applyLanModeUi() {
+        if (!::lanPanel.isInitialized) return
+        if (!lanEnabled()) {
+            lanPanel.visibility = View.GONE
+            val wasHidden = webView.visibility != View.VISIBLE
+            webView.visibility = View.VISIBLE
+            webView.onResume()
+            if (wasHidden && serverPort != 0) {
+                webView.loadUrl("http://127.0.0.1:$serverPort/")
+            }
+            return
+        }
+        webView.onPause()
+        webView.visibility = View.GONE
+        lanPanel.visibility = View.VISIBLE
+        lanPanelText.text = if (lanRelay.isRunning()) {
+            val port = lanRelay.boundPort
+            val ips = LanTcpRelay.lanIPv4Addresses()
+            val urls = if (ips.isEmpty()) {
+                "http://<this device>:$port"
+            } else {
+                ips.joinToString("\n") { "http://$it:$port" }
+            }
+            getString(R.string.lan_panel_active) + "\n" + urls
+        } else {
+            getString(R.string.lan_url_none)
+        }
+    }
+
     // Packages the COMPLETE log files (plus the in-memory server ring buffer and
     // browser console) into one zip. Nothing is truncated: big reports are
     // exactly the ones we need.
@@ -860,10 +977,12 @@ class MainActivity : AppCompatActivity() {
     private fun buildDeviceReport(): String = buildString {
         val info = try { packageManager.getPackageInfo(packageName, 0) } catch (_: Throwable) { null }
         append("TurtleTavern (Go) ").append(info?.versionName ?: "?").append(" (").append(info?.longVersionCode ?: 0).append(")\n")
+        append("backend: ").append(try { Gotavern.version() } catch (_: Throwable) { "?" }).append('\n')
         append("device: ").append(Build.MANUFACTURER).append(' ').append(Build.MODEL).append('\n')
         append("android: ").append(Build.VERSION.RELEASE).append(" (API ").append(Build.VERSION.SDK_INT).append(")\n")
         append("abis: ").append(Build.SUPPORTED_ABIS.joinToString()).append('\n')
         append("server port: ").append(serverPort).append('\n')
+        append("lan relay: ").append(if (lanRelay.isRunning()) "0.0.0.0:" + lanRelay.boundPort + " -> 127.0.0.1:" + serverPort else "off").append('\n')
         append("log dir: ").append(AppLog.logDirectory?.absolutePath ?: "?").append('\n')
     }
 
@@ -877,6 +996,7 @@ class MainActivity : AppCompatActivity() {
             val port = Gotavern.start(root.absolutePath, 0)
             serverPort = port
             AppLog.i(TAG, "Server ready on port $port")
+            syncLanRelay()
             ui.post {
                 progressOverlay.visibility = View.GONE
                 status.visibility = View.GONE
@@ -1028,6 +1148,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         AppLog.i(TAG, "onDestroy (isFinishing=$isFinishing)")
+        lanRelay.stop()
         ui.removeCallbacks(LOG_REFRESH_TICK)
         super.onDestroy()
     }
@@ -1038,6 +1159,8 @@ class MainActivity : AppCompatActivity() {
         private const val LOG_TEXT_MAX_CHARS = 400_000
         private const val PREFS = "turtletavern"
         private const val KEY_KEEP_ALIVE = "keep_alive"
+        private const val KEY_LISTEN_LAN = "listen_lan"
+        private const val LAN_PORT_DEFAULT = 8000
         private const val CONSOLE_PATCH_JS = """(function(){if(window.__ttConsolePatched)return;window.__ttConsolePatched=true;function str(v){if(typeof v==='string')return v;if(v===null)return 'null';if(v===undefined)return 'undefined';if(v instanceof Error)return v.stack||String(v);if(typeof v==='object'){try{var seen=new Set();return JSON.stringify(v,function(k,x){if(typeof x==='object'&&x!==null){if(seen.has(x))return '[Circular]';seen.add(x);}if(x instanceof Error)return x.stack||x.message;return x;});}catch(e){try{return String(v);}catch(_){return '[Object]';}}}try{return String(v);}catch(e){return '[unprintable]';}}['log','info','warn','error','debug'].forEach(function(k){try{var o=console[k]?console[k].bind(console):null;console[k]=function(){var m=Array.prototype.map.call(arguments,str).join(' ');if(o){try{o(m);}catch(e){}}};}catch(e){}});})();"""
         private const val DOWNLOAD_HOOK_JS = """(function(){if(window.__ttDownloadHook)return;window.__ttDownloadHook=true;try{var origRevoke=URL.revokeObjectURL.bind(URL);URL.revokeObjectURL=function(u){try{setTimeout(function(){try{origRevoke(u);}catch(e){}},60000);}catch(e){}};}catch(e){}document.addEventListener('click',function(ev){try{var a=ev.target&&ev.target.closest?ev.target.closest('a[download]'):null;if(!a)return;var href=a.getAttribute('href')||'';if(href.indexOf('blob:')!==0)return;ev.preventDefault();ev.stopPropagation();var name=a.getAttribute('download')||'download';fetch(href).then(function(res){if(!res.ok)throw new Error('HTTP '+res.status);return res.blob();}).then(function(blob){var r=new FileReader();r.onload=function(){try{TTBlobDownload.onBlobData(r.result,name,blob.type||'application/octet-stream');}catch(e){}};r.onerror=function(){try{TTBlobDownload.onBlobError('read failed',name);}catch(e){}};r.readAsDataURL(blob);}).catch(function(e){try{TTBlobDownload.onBlobError((e&&e.message)||String(e),name);}catch(x){}});}catch(e){}},true);})();"""
     }
