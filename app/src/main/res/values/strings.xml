@@ -16,6 +16,12 @@
     <string name="import_failed">Import failed: %1$s</string>
     <string name="import_done">Backup imported — restarting server…</string>
     <string name="keep_alive">Keep server running (wake lock)</string>
+    <string name="lan_listen">Listen on LAN (non-localhost)</string>
+    <string name="lan_listen_hint">Exposes the server on your Wi-Fi — anyone on your network can open it. Off by default.</string>
+    <string name="lan_url_none">LAN: waiting for server…</string>
+    <string name="lan_panel_active">LAN mode on — WebView off.\nOpen on your other device:</string>
+    <string name="lan_url_off">LAN relay off</string>
+    <string name="lan_failed">LAN relay failed: %1$s</string>
     <string name="keep_alive_notification_channel">Server keep-alive</string>
     <string name="keep_alive_notification_title">TurtleTavern server running</string>
     <string name="keep_alive_notification_text">Wake lock held so the system stops closing the app</string>
