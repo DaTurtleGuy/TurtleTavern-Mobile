@@ -13,11 +13,13 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
+import android.util.Base64
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowInsets
 import android.webkit.CookieManager
 import android.webkit.ConsoleMessage
+import android.webkit.JavascriptInterface
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
@@ -155,6 +157,9 @@ class MainActivity : AppCompatActivity() {
             // input in the frontend appeared to accept zips only.
             allowContentAccess = true
         }
+        // Bridge for blob: downloads — evaluateJavascript can't await a Promise,
+        // so the page posts the fetched bytes back through here instead.
+        webView.addJavascriptInterface(BlobDownloader(), "TTBlobDownload")
 
         // Default policy waives the renderer whenever this activity is not
         // visible, which lets Android freeze it mid-generation. Keep it
@@ -261,9 +266,24 @@ class MainActivity : AppCompatActivity() {
                 }
                 return true
             }
+
+            override fun onPageFinished(view: WebView, url: String) {
+                super.onPageFinished(view, url)
+                // Object args logged with console.log(obj) reach onConsoleMessage
+                // as the literal "[object Object]" (information already lost), so
+                // stringify them in-page before Chromium flattens them.
+                injectConsolePatch()
+            }
         }
 
         webView.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+            // DownloadManager only accepts http(s) — SillyTavern exports (chat
+            // txt, JSON, etc.) use blob: URLs, which used to crash here with
+            // IllegalArgumentException: Can only download HTTP/HTTPS URIs.
+            if (url.startsWith("blob:")) {
+                downloadBlobUrl(url, contentDisposition, mimeType)
+                return@setDownloadListener
+            }
             try {
                 val fileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
                 val request = DownloadManager.Request(Uri.parse(url)).apply {
@@ -295,6 +315,84 @@ class MainActivity : AppCompatActivity() {
         })
 
         Thread { boot() }.start()
+    }
+
+    private fun injectConsolePatch() {
+        try {
+            webView.evaluateJavascript(CONSOLE_PATCH_JS, null)
+            webView.evaluateJavascript(DOWNLOAD_HOOK_JS, null)
+        } catch (t: Throwable) {
+            AppLog.w(TAG, "Console patch injection failed: " + t.message)
+        }
+    }
+
+    private fun downloadBlobUrl(blobUrl: String, contentDisposition: String?, mimeType: String) {
+        val fileName = URLUtil.guessFileName(blobUrl, contentDisposition, mimeType)
+        Toast.makeText(this, getString(R.string.downloading_file, fileName), Toast.LENGTH_SHORT).show()
+        val js = "(function(){var u=" + JSONObject.quote(blobUrl) +
+            ",n=" + JSONObject.quote(fileName) +
+            ",m=" + JSONObject.quote(mimeType.ifEmpty { "application/octet-stream" }) + ";" +
+            "fetch(u).then(function(res){if(!res.ok)throw new Error('HTTP '+res.status);return res.blob();})" +
+            ".then(function(blob){var r=new FileReader();" +
+            "r.onload=function(){TTBlobDownload.onBlobData(r.result,n,m);};" +
+            "r.onerror=function(){TTBlobDownload.onBlobError('read failed',n);};" +
+            "r.readAsDataURL(blob);})" +
+            ".catch(function(e){TTBlobDownload.onBlobError((e&&e.message)||String(e),n);});})();"
+        try {
+            webView.evaluateJavascript(js, null)
+        } catch (t: Throwable) {
+            AppLog.e(TAG, "Blob download failed", t)
+            Toast.makeText(this, getString(R.string.download_failed), Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private inner class BlobDownloader {
+        @JavascriptInterface
+        fun onBlobData(dataUrl: String, fileName: String, mimeType: String) {
+            Thread {
+                try {
+                    val comma = dataUrl.indexOf(',')
+                    if (!dataUrl.startsWith("data:") || comma < 0) {
+                        throw java.io.IOException("unexpected blob payload")
+                    }
+                    val bytes = Base64.decode(dataUrl.substring(comma + 1), Base64.DEFAULT)
+                    saveBlobBytesToDownloads(bytes, fileName, mimeType)
+                } catch (t: Throwable) {
+                    AppLog.e(TAG, "Blob download failed", t)
+                    ui.post {
+                        Toast.makeText(this@MainActivity, getString(R.string.download_failed), Toast.LENGTH_LONG).show()
+                    }
+                }
+            }.start()
+        }
+
+        @JavascriptInterface
+        fun onBlobError(error: String, fileName: String) {
+            AppLog.e(TAG, "Blob download failed for $fileName: $error")
+            ui.post {
+                Toast.makeText(this@MainActivity, getString(R.string.download_failed), Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun saveBlobBytesToDownloads(bytes: ByteArray, fileName: String, mimeType: String) {
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+            put(MediaStore.Downloads.MIME_TYPE, mimeType)
+            put(MediaStore.Downloads.IS_PENDING, 1)
+        }
+        val resolver = contentResolver
+        val target = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: throw java.io.IOException("no Downloads collection available")
+        resolver.openOutputStream(target).use { output ->
+            requireNotNull(output) { "cannot open Downloads target" }
+            output.write(bytes)
+        }
+        values.clear()
+        values.put(MediaStore.Downloads.IS_PENDING, 0)
+        resolver.update(target, values, null, null)
+        AppLog.i(TAG, "Blob download saved to Downloads/" + fileName + " (" + bytes.size + " bytes)")
+        ui.post { Toast.makeText(this, getString(R.string.download_logs_done, fileName), Toast.LENGTH_LONG).show() }
     }
 
     private fun isArm64(): Boolean = Build.SUPPORTED_ABIS.any { it == "arm64-v8a" }
@@ -865,6 +963,34 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    // Chromium's WebView can desync after a window-focus loss with an editable
+    // focused (e.g. task-switch away with the keyboard up): on resume,
+    // document.activeElement still reports the textarea but the view-level IME
+    // session is dead, so taps and JS .focus() no longer open the keyboard —
+    // only recreating the view fixed it. clearFocus()+requestFocus() re-arms
+    // the editable-focus session when the window regains focus.
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus) return
+        // The drawer's config editor is a real EditText owned by the activity:
+        // if the user was typing there, leave its focus alone.
+        if (configEdit.hasFocus()) return
+        AppLog.i(TAG, "window focus regained — re-arming WebView focus")
+        webView.clearFocus()
+        webView.requestFocus()
+        // If the page thinks an editable is still focused, bounce its DOM focus
+        // so the re-armed IME session attaches to it. Running before the WebView
+        // is loaded is harmless (no-op when body is the active element).
+        ui.post {
+            webView.evaluateJavascript(
+                "(function(){var a=document.activeElement;" +
+                    "if(a&&(a.id==='send_textarea'||a.tagName==='TEXTAREA'||a.tagName==='INPUT')){" +
+                    "a.blur();a.focus();}})()",
+                null,
+            )
+        }
+    }
+
     override fun onStart() {
         super.onStart()
         AppLog.i(TAG, "onStart")
@@ -912,5 +1038,7 @@ class MainActivity : AppCompatActivity() {
         private const val LOG_TEXT_MAX_CHARS = 400_000
         private const val PREFS = "turtletavern"
         private const val KEY_KEEP_ALIVE = "keep_alive"
+        private const val CONSOLE_PATCH_JS = """(function(){if(window.__ttConsolePatched)return;window.__ttConsolePatched=true;function str(v){if(typeof v==='string')return v;if(v===null)return 'null';if(v===undefined)return 'undefined';if(v instanceof Error)return v.stack||String(v);if(typeof v==='object'){try{var seen=new Set();return JSON.stringify(v,function(k,x){if(typeof x==='object'&&x!==null){if(seen.has(x))return '[Circular]';seen.add(x);}if(x instanceof Error)return x.stack||x.message;return x;});}catch(e){try{return String(v);}catch(_){return '[Object]';}}}try{return String(v);}catch(e){return '[unprintable]';}}['log','info','warn','error','debug'].forEach(function(k){try{var o=console[k]?console[k].bind(console):null;console[k]=function(){var m=Array.prototype.map.call(arguments,str).join(' ');if(o){try{o(m);}catch(e){}}};}catch(e){}});})();"""
+        private const val DOWNLOAD_HOOK_JS = """(function(){if(window.__ttDownloadHook)return;window.__ttDownloadHook=true;try{var origRevoke=URL.revokeObjectURL.bind(URL);URL.revokeObjectURL=function(u){try{setTimeout(function(){try{origRevoke(u);}catch(e){}},60000);}catch(e){}};}catch(e){}document.addEventListener('click',function(ev){try{var a=ev.target&&ev.target.closest?ev.target.closest('a[download]'):null;if(!a)return;var href=a.getAttribute('href')||'';if(href.indexOf('blob:')!==0)return;ev.preventDefault();ev.stopPropagation();var name=a.getAttribute('download')||'download';fetch(href).then(function(res){if(!res.ok)throw new Error('HTTP '+res.status);return res.blob();}).then(function(blob){var r=new FileReader();r.onload=function(){try{TTBlobDownload.onBlobData(r.result,name,blob.type||'application/octet-stream');}catch(e){}};r.onerror=function(){try{TTBlobDownload.onBlobError('read failed',name);}catch(e){}};r.readAsDataURL(blob);}).catch(function(e){try{TTBlobDownload.onBlobError((e&&e.message)||String(e),name);}catch(x){}});}catch(e){}},true);})();"""
     }
 }
