@@ -33,8 +33,8 @@ android {
         applicationId = "com.daturtleguy.turtletavern"
         minSdk = 30
         targetSdk = 37
-        versionCode = 20
-        versionName = "0.1.6-beta"
+        versionCode = 21
+        versionName = "0.1.7A"
 
         // arm64 only: Android's x86_64 seccomp blocks the stat syscall family
         // used by SQLite, so x86_64 devices/emulators are unsupported.
