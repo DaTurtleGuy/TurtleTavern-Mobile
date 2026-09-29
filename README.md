@@ -50,6 +50,15 @@ unhealthy amounts of gratitude.
 
 Requirements: JDK 17+, Android SDK (API 37), NDK 30, gomobile tooling.
 
+> **Note — a fresh clone does not compile on its own.** Two build inputs are
+> gitignored and therefore **not** in this repo:
+> `app/libs/gotavern.aar` (the gomobile backend; the Kotlin sources import
+> `com.daturtleguy.turtletavern.gotavern.Gotavern`, which only ships inside the
+> AAR) and `app/src/main/assets/bootstrap.zip` (the frontend bundle read at
+> runtime). Run both steps below to generate them before building. The keystore
+> and `signing.properties` under `app/signing/` are also absent — required for
+> signed release builds only, never committed.
+
 1. Generate `bootstrap.zip` (frontend bundle) from the TurtleTavern(GO)
    server repo:
    ```bash
