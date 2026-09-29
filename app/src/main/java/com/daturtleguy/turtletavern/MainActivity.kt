@@ -89,8 +89,25 @@ class MainActivity : AppCompatActivity() {
     private val fileChooserLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val callback = fileChooserCallback
         fileChooserCallback = null
-        val uris = if (result.resultCode == RESULT_OK) result.data?.let { WebChromeClient.FileChooserParams.parseResult(RESULT_OK, it) } else null
-        callback?.onReceiveValue(uris ?: arrayOf())
+        callback?.onReceiveValue(collectPickerUris(result.resultCode, result.data))
+    }
+
+    private fun collectPickerUris(resultCode: Int, data: Intent?): Array<Uri> {
+        if (resultCode != RESULT_OK || data == null) return arrayOf()
+        val out = ArrayList<Uri>()
+        data.data?.let { out.add(it) }
+        val clip = try { data.clipData } catch (_: Throwable) { null }
+        if (clip != null) {
+            for (i in 0 until clip.itemCount) {
+                try {
+                    val item = clip.getItemAt(i) ?: continue
+                    (item.uri ?: item.intent?.data)?.let { out.add(it) }
+                } catch (_: Throwable) {
+                    continue
+                }
+            }
+        }
+        return out.distinct().toTypedArray()
     }
 
     private val restorePicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
