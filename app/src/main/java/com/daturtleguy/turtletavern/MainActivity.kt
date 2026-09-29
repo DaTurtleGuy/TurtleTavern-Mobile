@@ -13,6 +13,8 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
+import android.text.Editable
+import android.text.TextWatcher
 import android.util.Base64
 import android.view.MotionEvent
 import android.view.View
@@ -66,7 +68,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var progress: ProgressBar
     private lateinit var status: TextView
     private lateinit var drawer: DrawerLayout
-    private lateinit var configEdit: EditText
+    private lateinit var configSearch: EditText
+    private lateinit var configRows: LinearLayout
+    private var configDoc: CfgDoc? = null
+    private var configUi: ConfigEditorUi? = null
     private lateinit var logsText: TextView
     private lateinit var logsScroll: ScrollView
     private lateinit var btnTabConfig: Button
@@ -135,7 +140,15 @@ class MainActivity : AppCompatActivity() {
         progress = findViewById(R.id.progress)
         status = findViewById(R.id.status)
         drawer = findViewById(R.id.drawer)
-        configEdit = findViewById(R.id.config_edit)
+        configSearch = findViewById(R.id.config_search)
+        configRows = findViewById(R.id.config_rows)
+        configSearch.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
+            override fun afterTextChanged(s: Editable?) {
+                configUi?.applySearch(s?.toString() ?: "")
+            }
+        })
         logsText = findViewById(R.id.logs_text)
         logsScroll = findViewById(R.id.panel_logs)
         // Following the tail is driven by *touch*, not by scroll events:
@@ -457,15 +470,40 @@ class MainActivity : AppCompatActivity() {
     private fun loadConfigIntoEditor() {
         Thread {
             val file = File(filesDir, "config.yaml")
-            val text = if (file.isFile) file.readText() else "# config.yaml not found"
-            ui.post { configEdit.setText(text) }
+            val raw = if (file.isFile) file.readText() else "# config.yaml not found"
+            val doc = try {
+                ConfigParser.parse(raw.split("\n"))
+            } catch (_: Throwable) {
+                null
+            }
+            ui.post {
+                if (doc != null) {
+                    configDoc = doc
+                    configUi = ConfigEditorUi(this, doc, configRows).also { it.build() }
+                    configUi?.applySearch(configSearch.text.toString())
+                } else {
+                    configDoc = null
+                    configUi = null
+                    configRows.removeAllViews()
+                    configRows.addView(TextView(this).apply {
+                        text = raw
+                        typeface = android.graphics.Typeface.MONOSPACE
+                        setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f)
+                        setTextColor(0xFFDDDDDD.toInt())
+                        val pad = (8 * resources.displayMetrics.density).toInt()
+                        setPadding(pad, pad, pad, pad)
+                    })
+                }
+            }
         }.start()
     }
 
     private fun saveConfig() {
-        val text = configEdit.text.toString()
+        val doc = configDoc
         Thread {
             try {
+                val text = doc?.render()
+                    ?: File(filesDir, "config.yaml").readText()
                 File(filesDir, "config.yaml").writeText(text)
                 ui.post { Toast.makeText(this, "config.yaml saved — Restart to apply", Toast.LENGTH_SHORT).show() }
             } catch (t: Throwable) {
@@ -1109,9 +1147,9 @@ class MainActivity : AppCompatActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (!hasFocus) return
-        // The drawer's config editor is a real EditText owned by the activity:
-        // if the user was typing there, leave its focus alone.
-        if (configEdit.hasFocus()) return
+        // The drawer's config editor owns real EditTexts: if the user was
+        // typing there, leave focus alone.
+        if (configRows.findFocus() != null) return
         AppLog.i(TAG, "window focus regained — re-arming WebView focus")
         webView.clearFocus()
         webView.requestFocus()

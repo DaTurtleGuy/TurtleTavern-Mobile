@@ -124,18 +124,29 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent">
 
-                <EditText
-                    android:id="@+id/config_edit"
+                <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:padding="8dp"
-                    android:gravity="top"
-                    android:typeface="monospace"
-                    android:textSize="12sp"
-                    android:textColor="#FFDDDDDD"
-                    android:hint="@string/config_hint"
-                    android:inputType="textMultiLine|textNoSuggestions"
-                    android:minLines="12" />
+                    android:orientation="vertical">
+
+                    <EditText
+                        android:id="@+id/config_search"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:padding="8dp"
+                        android:textSize="13sp"
+                        android:textColor="#FFDDDDDD"
+                        android:hint="@string/config_search_hint"
+                        android:inputType="text|textNoSuggestions"
+                        android:singleLine="true" />
+
+                    <LinearLayout
+                        android:id="@+id/config_rows"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:paddingBottom="16dp" />
+                </LinearLayout>
             </ScrollView>
 
             <ScrollView

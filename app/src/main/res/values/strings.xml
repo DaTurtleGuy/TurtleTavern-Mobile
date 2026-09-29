@@ -4,6 +4,7 @@
     <string name="tab_config">Config</string>
     <string name="tab_logs">Logs</string>
     <string name="config_hint">config.yaml</string>
+    <string name="config_search_hint">Search settings…</string>
     <string name="save_config">Save</string>
     <string name="restart_server">Restart</string>
     <string name="downloading_file">Downloading %1$s…</string>
